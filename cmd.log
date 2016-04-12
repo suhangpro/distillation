@@ -1,0 +1,7 @@
+# step 1: train on mnist+letters and get logits
+python cnn_mnist.py --save_logit --save_prob --dataset=mnist+letters --num_epochs=15 --train_size=400000 --val_size=20000
+# or (after changing mnist train size 60000->600
+python cnn_mnist.py --save_logit --save_prob --dataset=mnist+letters --num_epochs=15 --train_size=355600 --val_size=5000 --lr_decay=0.85
+# step 2: select logits
+# step 3: train on mnist with logits
+python cnn_mnist.py --target=logit --dataset=mnist --num_epochs=300 --train_size=55000 --val_size=5000 --init_lr=0.001 --lr_decay=0.98
