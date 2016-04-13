@@ -24,14 +24,18 @@ EVAL_FREQUENCY = 100  # Number of steps between evaluations.
 
 tf.app.flags.DEFINE_string("dataset", "mnist", "Choices: mnist, letters")
 tf.app.flags.DEFINE_string("target", "label", "Choices: label, prob, prob_l2, logit, logitp")
-tf.app.flags.DEFINE_boolean("save_prob", False, "Save training posteriors if True.")
-tf.app.flags.DEFINE_boolean("save_logit", False, "Save training logits if True.")
 tf.app.flags.DEFINE_integer("train_size", 55000, "Size of training set.")
 tf.app.flags.DEFINE_integer("val_size", 5000, "Size of validation set.")
 tf.app.flags.DEFINE_integer("num_epochs", 10, "Number of epochs.")
 tf.app.flags.DEFINE_float("init_lr", 0.01, "Initial learning rate.")
 tf.app.flags.DEFINE_float("lr_decay", 0.95, "Learning rate decay.")
-tf.app.flags.DEFINE_string("logit_file", "train-logit.npy", "Path to save or load logits/probs.")
+tf.app.flags.DEFINE_string("load_logit_from", "", "File name under data/ for loading logits.")
+tf.app.flags.DEFINE_string("save_logit_to", "", "File name under data/ for saving/loading logits.")
+tf.app.flags.DEFINE_string("load_prob_from", "", "File name under data/ for loading probs.")
+tf.app.flags.DEFINE_string("save_prob_to", "", "File name under data/ for saving/loading probs.")
+tf.app.flags.DEFINE_string("load_model_from", "", "File name under data/ for loading model.")
+tf.app.flags.DEFINE_string("save_model_to", "", "File name under data/ for saving model.")
+tf.app.flags.DEFINE_boolean("load_full_model", False, "Load all layers incl. classification if True")
 FLAGS = tf.app.flags.FLAGS
 
 
@@ -150,11 +154,14 @@ def model(data, label=None, train=False):
     """The Model definition."""
     tf.get_variable_scope().set_initializer(
         tf.truncated_normal_initializer(stddev=0.1, seed=SEED))
+    var_list_wo_last = []
     regularizers = 0
     with tf.variable_scope('conv1'):
         filters = tf.get_variable('filters', [5, 5, NUM_CHANNELS, 32])
         biases = tf.get_variable('biases', [32],
                                  initializer=tf.constant_initializer(0.0))
+        var_list_wo_last.append(filters)
+        var_list_wo_last.append(biases)
         conv = tf.nn.conv2d(data,
                             filters,
                             strides=[1, 1, 1, 1],
@@ -168,6 +175,8 @@ def model(data, label=None, train=False):
         filters = tf.get_variable('filters', [5, 5, 32, 64])
         biases = tf.get_variable('biases', [64],
                                  initializer=tf.constant_initializer(0.1))
+        var_list_wo_last.append(filters)
+        var_list_wo_last.append(biases)
         conv = tf.nn.conv2d(pool,
                             filters,
                             strides=[1, 1, 1, 1],
@@ -184,6 +193,8 @@ def model(data, label=None, train=False):
         filters = tf.get_variable('filters', [IMAGE_SIZE // 4 * IMAGE_SIZE // 4 * 64, 512])
         biases = tf.get_variable('biases', [512],
                                  initializer=tf.constant_initializer(0.1))
+        var_list_wo_last.append(filters)
+        var_list_wo_last.append(biases)
         regularizers += (tf.nn.l2_loss(filters) + tf.nn.l2_loss(biases))
         hidden = tf.nn.relu(tf.matmul(pool, filters) + biases)
         if train:
@@ -217,7 +228,7 @@ def model(data, label=None, train=False):
         # Add the regularization term to the loss.
         loss += 5e-4 * regularizers
 
-    return logits, loss
+    return logits, loss, var_list_wo_last
 
 
 def main(argv=None):  # pylint: disable=unused-argument
@@ -261,7 +272,11 @@ def main(argv=None):  # pylint: disable=unused-argument
 
     # Training probs/logits
     if FLAGS.target != "label":
-        train_logits = extract_logits(FLAGS.logit_file)
+        if FLAGS.target == "logit" or FLAGS.target == "logitp":
+            train_logits = extract_logits(FLAGS.load_logit_from)
+        else:
+            assert(FLAGS.target == "prob" or FLAGS.target == "prob_l2")
+            train_logits = extract_logits(FLAGS.load_prob_from)
         train_logits = train_logits[order_idxs_train, :]
         train_logits = train_logits[:FLAGS.train_size]
         gt_accuracy = numpy.sum((numpy.argmax(train_logits, 1) == train_labels).astype(numpy.int64)) \
@@ -285,7 +300,7 @@ def main(argv=None):  # pylint: disable=unused-argument
 
     # Training computation: logits + cross-entropy loss.
     with tf.variable_scope("cnn"):
-        logits, loss = model(train_data_node, train_labels_node, True)
+        logits, loss, var_list_wo_last = model(train_data_node, train_labels_node, True)
 
     # Optimizer: set up a variable that's incremented once per batch and
     # controls the learning rate decay.
@@ -307,15 +322,28 @@ def main(argv=None):  # pylint: disable=unused-argument
 
     # Predictions for the test and validation, which we'll compute less often.
     with tf.variable_scope("cnn", reuse=True):
-        eval_logit, _ = model(eval_data_node)
+        eval_logit, _, _ = model(eval_data_node)
     eval_prediction = tf.nn.softmax(eval_logit)
+
+    # Add ops to save and restore all the variables.
+    saver = tf.train.Saver()
 
     # Create a local session to run the training.
     start_time = time.time()
     with tf.Session() as sess:
         # Run all the initializers to prepare the trainable parameters.
         tf.initialize_all_variables().run()
-        print('Initialized!')
+        print("Model initialized.")
+
+        # Restore variables from disk.
+        if len(FLAGS.load_model_from) != 0:
+            if FLAGS.load_full_model:
+                loader = tf.train.Saver()
+            else:
+                loader = tf.train.Saver(var_list=var_list_wo_last)
+            loader.restore(sess, os.path.join(WORK_DIRECTORY, FLAGS.load_model_from))
+            print("Model restored.")
+
         # Loop through training steps.
         for step in xrange(int(num_epochs * train_size) // BATCH_SIZE):
             # Compute the offset of the current minibatch in the data.
@@ -351,19 +379,20 @@ def main(argv=None):  # pylint: disable=unused-argument
                     eval_in_batches(eval_prediction, eval_data_node, validation_data, sess), validation_labels))
                 sys.stdout.flush()
         # Save posteriors of training samples
-        if FLAGS.save_prob:
-            if FLAGS.save_logit:
-                filename = 'train-prob.npy'
-            else:
-                filename = FLAGS.logit_file
+        if len(FLAGS.save_prob_to) > 0:
             train_probs = eval_in_batches(eval_prediction, eval_data_node, train_data_all, sess)
-            numpy.save(os.path.join(WORK_DIRECTORY, filename), train_probs)
-        if FLAGS.save_logit:
+            numpy.save(os.path.join(WORK_DIRECTORY, FLAGS.save_prob_to), train_probs)
+        if len(FLAGS.save_logit_to) > 0:
             train_logits = eval_in_batches(eval_logit, eval_data_node, train_data_all, sess)
-            numpy.save(os.path.join(WORK_DIRECTORY, FLAGS.logit_file), train_logits)
+            numpy.save(os.path.join(WORK_DIRECTORY, FLAGS.save_logit_to), train_logits)
         # Finally print the result!
         test_error = error_rate(eval_in_batches(eval_prediction, eval_data_node, test_data, sess), test_labels)
         print('Test error: %.1f%%' % test_error)
+
+        # Save model
+        if len(FLAGS.save_model_to) != 0:
+            save_path = saver.save(sess, os.path.join(WORK_DIRECTORY, FLAGS.save_model_to))
+            print("Model saved in file: %s" % save_path)
 
 
 if __name__ == '__main__':
