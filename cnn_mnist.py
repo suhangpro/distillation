@@ -85,9 +85,9 @@ def extract_logits(filename, num_images=-1, offset=0):
     print('Extracting %s (offset=%d)' % (filepath, offset))
     logits = numpy.load(filepath)
     if num_images != -1:
-        logits = logits[offset:offset + num_images, :]
+        logits = logits[offset:offset + num_images, :NUM_LABELS]
     else:
-        logits = logits[offset:, :]
+        logits = logits[offset:, :NUM_LABELS]
     return logits
 
 
@@ -310,10 +310,10 @@ def main(argv=None):  # pylint: disable=unused-argument
     # Training probs/logits
     if FLAGS.target != "label":
         if FLAGS.target == "logit" or FLAGS.target == "logitp":
-            train_logits = extract_logits(FLAGS.load_logit_from)
+            train_logits = extract_logits(FLAGS.load_logit_from, train_size)
         else:
             assert(FLAGS.target == "prob" or FLAGS.target == "prob_l2")
-            train_logits = extract_logits(FLAGS.load_prob_from)
+            train_logits = extract_logits(FLAGS.load_prob_from, train_size)
         train_logits = train_logits[order_idxs_train, :]
         train_logits = train_logits[:train_size]
         gt_accuracy = numpy.sum((numpy.argmax(train_logits, 1) == train_labels).astype(numpy.int64)) \
