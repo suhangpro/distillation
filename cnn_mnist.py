@@ -20,7 +20,7 @@ PIXEL_DEPTH = 255
 SEED = 66478  # Set to None for random seed.
 EVAL_FREQUENCY = 100  # Number of steps between evaluations.
 
-tf.app.flags.DEFINE_string("dataset", "mnist", "Choices: mnist, mnist550, letters")
+tf.app.flags.DEFINE_string("dataset", "mnist", "Choices: mnist, mnist550, mnist100, letters")
 tf.app.flags.DEFINE_string("target", "label", "Choices: label, prob, prob_l2, logit, logitp")
 tf.app.flags.DEFINE_integer("train_size", -1, "Size of training set. Set to negative to use all.")
 tf.app.flags.DEFINE_integer("val_size", -1, "Size of validation set. Set to negative to use all.")
@@ -66,7 +66,7 @@ def extract_data(filename, num_images, offset=0):
         data = numpy.frombuffer(buf, dtype=numpy.uint8).astype(numpy.float32)
         data = (data - (PIXEL_DEPTH / 2.0)) / PIXEL_DEPTH
         data = data.reshape(num_images, IMAGE_SIZE, IMAGE_SIZE, 1)
-        return data
+    return data
 
 
 def extract_labels(filename, num_images, offset=0):
@@ -134,21 +134,34 @@ def dataset(dataset_name):
         # Extract it into numpy arrays.
         train_data = extract_data(train_data_filename, 55000)
         train_labels = extract_labels(train_labels_filename, 55000)
-        val_data = extract_data(train_data_filename, 5000, 50000)
-        val_labels = extract_labels(train_labels_filename, 5000, 50000)
+        val_data = extract_data(train_data_filename, 5000, 55000)
+        val_labels = extract_labels(train_labels_filename, 5000, 55000)
         test_data = extract_data(test_data_filename, 10000)
         test_labels = extract_labels(test_labels_filename, 10000)
     elif dataset_name == 'mnist550':
         # Get the data.
-        train_data_filename = maybe_download('train-images-idx3-ubyte.gz')
-        train_labels_filename = maybe_download('train-labels-idx1-ubyte.gz')
+        train_data_filename = maybe_download('mnist-images-idx3-ubyte.gz')
+        train_labels_filename = maybe_download('mnist-labels-idx1-ubyte.gz')
         test_data_filename = maybe_download('t10k-images-idx3-ubyte.gz')
         test_labels_filename = maybe_download('t10k-labels-idx1-ubyte.gz')
         # Extract it into numpy arrays.
         train_data = extract_data(train_data_filename, 550)
         train_labels = extract_labels(train_labels_filename, 550)
-        val_data = extract_data(train_data_filename, 5000, 50000)
-        val_labels = extract_labels(train_labels_filename, 5000, 50000)
+        val_data = extract_data(train_data_filename, 5000, 55000)
+        val_labels = extract_labels(train_labels_filename, 5000, 55000)
+        test_data = extract_data(test_data_filename, 10000)
+        test_labels = extract_labels(test_labels_filename, 10000)
+    elif dataset_name == 'mnist100':
+        # Get the data.
+        train_data_filename = maybe_download('mnist-images-idx3-ubyte.gz')
+        train_labels_filename = maybe_download('mnist-labels-idx1-ubyte.gz')
+        test_data_filename = maybe_download('t10k-images-idx3-ubyte.gz')
+        test_labels_filename = maybe_download('t10k-labels-idx1-ubyte.gz')
+        # Extract it into numpy arrays.
+        train_data = extract_data(train_data_filename, 100)
+        train_labels = extract_labels(train_labels_filename, 100)
+        val_data = extract_data(train_data_filename, 5000, 55000)
+        val_labels = extract_labels(train_labels_filename, 5000, 55000)
         test_data = extract_data(test_data_filename, 10000)
         test_labels = extract_labels(test_labels_filename, 10000)
     elif dataset_name == 'letters':
