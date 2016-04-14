@@ -29,6 +29,7 @@ tf.app.flags.DEFINE_integer("num_epochs", 10, "Number of epochs.")
 tf.app.flags.DEFINE_integer("batch_size", 64, "Batch size at training.")
 tf.app.flags.DEFINE_integer("eval_batch_size", 512, "Batch size at evaluation.")
 tf.app.flags.DEFINE_integer("num_lr_stages", 4, "Number of different learning rate.")
+tf.app.flags.DEFINE_integer("train_ver", 0, "Training set version.")
 tf.app.flags.DEFINE_float("init_lr", 0.01, "Initial learning rate.")
 tf.app.flags.DEFINE_float("lr_decay", 0.1, "Learning rate decay.")
 tf.app.flags.DEFINE_string("load_logit_from", "", "File name under data/ for loading logits.")
@@ -139,27 +140,29 @@ def dataset(dataset_name):
         test_data = extract_data(test_data_filename, 10000)
         test_labels = extract_labels(test_labels_filename, 10000)
     elif dataset_name == 'mnist550':
+        assert (FLAGS.train_ver < 100)
         # Get the data.
         train_data_filename = maybe_download('mnist-images-idx3-ubyte.gz')
         train_labels_filename = maybe_download('mnist-labels-idx1-ubyte.gz')
         test_data_filename = maybe_download('t10k-images-idx3-ubyte.gz')
         test_labels_filename = maybe_download('t10k-labels-idx1-ubyte.gz')
         # Extract it into numpy arrays.
-        train_data = extract_data(train_data_filename, 550)
-        train_labels = extract_labels(train_labels_filename, 550)
+        train_data = extract_data(train_data_filename, 550, FLAGS.train_ver * 550)
+        train_labels = extract_labels(train_labels_filename, 550, FLAGS.train_ver * 550)
         val_data = extract_data(train_data_filename, 5000, 55000)
         val_labels = extract_labels(train_labels_filename, 5000, 55000)
         test_data = extract_data(test_data_filename, 10000)
         test_labels = extract_labels(test_labels_filename, 10000)
     elif dataset_name == 'mnist100':
+        assert (FLAGS.train_ver < 550)
         # Get the data.
         train_data_filename = maybe_download('mnist-images-idx3-ubyte.gz')
         train_labels_filename = maybe_download('mnist-labels-idx1-ubyte.gz')
         test_data_filename = maybe_download('t10k-images-idx3-ubyte.gz')
         test_labels_filename = maybe_download('t10k-labels-idx1-ubyte.gz')
         # Extract it into numpy arrays.
-        train_data = extract_data(train_data_filename, 100)
-        train_labels = extract_labels(train_labels_filename, 100)
+        train_data = extract_data(train_data_filename, 100, FLAGS.train_ver * 100)
+        train_labels = extract_labels(train_labels_filename, 100, FLAGS.train_ver * 100)
         val_data = extract_data(train_data_filename, 5000, 55000)
         val_labels = extract_labels(train_labels_filename, 5000, 55000)
         test_data = extract_data(test_data_filename, 10000)
@@ -252,7 +255,7 @@ def model(data, label=None, train=False):
             loss = tf.nn.l2_loss(logits - tf_logit(label)) \
                    / FLAGS.batch_size
         else:
-            assert(FLAGS.target == "label")
+            assert (FLAGS.target == "label")
             loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
                 logits, label))
 
@@ -270,6 +273,7 @@ def main(argv=None):  # pylint: disable=unused-argument
     val_labels_list = []
     test_data_list = []
     test_labels_list = []
+    label_ranges = []
     label_offset = 0
     for dataset_name in dataset_names:
         train_data, train_labels, val_data, val_labels, test_data, test_labels = dataset(dataset_name)
@@ -279,7 +283,8 @@ def main(argv=None):  # pylint: disable=unused-argument
         val_labels_list.append(val_labels + label_offset)
         test_data_list.append(test_data)
         test_labels_list.append(test_labels + label_offset)
-        label_offset += max(max(train_labels), max(val_labels), max(test_labels)) + 1
+        label_ranges.append(max(max(train_labels), max(val_labels), max(test_labels)) + 1)
+        label_offset += label_ranges[-1]
     train_data = numpy.concatenate(train_data_list, axis=0)
     train_labels = numpy.concatenate(train_labels_list, axis=0)
     val_data = numpy.concatenate(val_data_list, axis=0)
@@ -325,7 +330,7 @@ def main(argv=None):  # pylint: disable=unused-argument
         if FLAGS.target == "logit" or FLAGS.target == "logitp":
             train_logits = extract_logits(FLAGS.load_logit_from, train_size)
         else:
-            assert(FLAGS.target == "prob" or FLAGS.target == "prob_l2")
+            assert (FLAGS.target == "prob" or FLAGS.target == "prob_l2")
             train_logits = extract_logits(FLAGS.load_prob_from, train_size)
         train_logits = train_logits[order_idxs_train, :]
         train_logits = train_logits[:train_size]
@@ -441,8 +446,18 @@ def main(argv=None):  # pylint: disable=unused-argument
 
         # Finally print the result!
         if test_size > 0:
-            test_error = error_rate(eval_in_batches(eval_prediction, eval_data_node, test_data, sess), test_labels)
-            print('Test error: %.1f%%' % test_error)
+            test_probs = eval_in_batches(eval_prediction, eval_data_node, test_data, sess)
+            if len(label_ranges) == 1:
+                print('Test error: %.1f%%' % error_rate(test_probs, test_labels))
+            else:
+                print('Test error:', end='')
+                for dataset_idx, label_subset_range in enumerate(label_ranges):
+                    label_begin = sum(label_ranges[:dataset_idx])
+                    label_end = sum(label_ranges[:dataset_idx + 1])
+                    label_mask = (test_labels >= label_begin) * (test_labels < label_end)
+                    print(' %s-%.1f%%' % (dataset_names[dataset_idx], error_rate(
+                        test_probs[label_mask, label_begin:label_end], test_labels[label_mask] - label_begin)), end='')
+                print(' overall-%.1f%%' % error_rate(test_probs, test_labels))
 
         # Save model
         if len(FLAGS.save_model_to) != 0:
