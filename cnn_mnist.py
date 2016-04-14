@@ -18,15 +18,16 @@ IMAGE_SIZE = 28
 NUM_CHANNELS = 1
 PIXEL_DEPTH = 255
 SEED = 66478  # Set to None for random seed.
-BATCH_SIZE = 64
-EVAL_BATCH_SIZE = 64
 EVAL_FREQUENCY = 100  # Number of steps between evaluations.
 
-tf.app.flags.DEFINE_string("dataset", "mnist", "Choices: mnist, letters")
+tf.app.flags.DEFINE_string("dataset", "mnist", "Choices: mnist, mnist550, letters")
 tf.app.flags.DEFINE_string("target", "label", "Choices: label, prob, prob_l2, logit, logitp")
-tf.app.flags.DEFINE_integer("train_size", 55000, "Size of training set.")
-tf.app.flags.DEFINE_integer("val_size", 5000, "Size of validation set.")
+tf.app.flags.DEFINE_integer("train_size", -1, "Size of training set. Set to negative to use all.")
+tf.app.flags.DEFINE_integer("val_size", -1, "Size of validation set. Set to negative to use all.")
+tf.app.flags.DEFINE_integer("test_size", -1, "Size of testing set. Set to negative to use all")
 tf.app.flags.DEFINE_integer("num_epochs", 10, "Number of epochs.")
+tf.app.flags.DEFINE_integer("batch_size", 64, "Batch size at training.")
+tf.app.flags.DEFINE_integer("eval_batch_size", 512, "Batch size at evaluation.")
 tf.app.flags.DEFINE_float("init_lr", 0.01, "Initial learning rate.")
 tf.app.flags.DEFINE_float("lr_decay", 0.95, "Learning rate decay.")
 tf.app.flags.DEFINE_string("load_logit_from", "", "File name under data/ for loading logits.")
@@ -105,11 +106,11 @@ def tf_logit(p):
 def eval_in_batches(target, data_node, data, sess):
     """Get all predictions for a dataset by running it in small batches."""
     size = data.shape[0]
-    if size < EVAL_BATCH_SIZE:
+    if size < FLAGS.eval_batch_size:
         raise ValueError("batch size for evals larger than dataset: %d" % size)
     predictions = numpy.ndarray(shape=(size, NUM_LABELS), dtype=numpy.float32)
-    for begin in xrange(0, size, EVAL_BATCH_SIZE):
-        end = begin + EVAL_BATCH_SIZE
+    for begin in xrange(0, size, FLAGS.eval_batch_size):
+        end = begin + FLAGS.eval_batch_size
         if end <= size:
             predictions[begin:end, :] = sess.run(
                 target,
@@ -117,7 +118,7 @@ def eval_in_batches(target, data_node, data, sess):
         else:
             batch_predictions = sess.run(
                 target,
-                feed_dict={data_node: data[-EVAL_BATCH_SIZE:, ...]})
+                feed_dict={data_node: data[-FLAGS.eval_batch_size:, ...]})
             predictions[begin:, :] = batch_predictions[begin - size:, :]
     return predictions
 
@@ -130,8 +131,23 @@ def dataset(dataset_name):
         test_data_filename = maybe_download('t10k-images-idx3-ubyte.gz')
         test_labels_filename = maybe_download('t10k-labels-idx1-ubyte.gz')
         # Extract it into numpy arrays.
-        train_data = extract_data(train_data_filename, 60000)
-        train_labels = extract_labels(train_labels_filename, 60000)
+        train_data = extract_data(train_data_filename, 55000)
+        train_labels = extract_labels(train_labels_filename, 55000)
+        val_data = extract_data(train_data_filename, 5000, 50000)
+        val_labels = extract_labels(train_labels_filename, 5000, 50000)
+        test_data = extract_data(test_data_filename, 10000)
+        test_labels = extract_labels(test_labels_filename, 10000)
+    elif dataset_name == 'mnist550':
+        # Get the data.
+        train_data_filename = maybe_download('train-images-idx3-ubyte.gz')
+        train_labels_filename = maybe_download('train-labels-idx1-ubyte.gz')
+        test_data_filename = maybe_download('t10k-images-idx3-ubyte.gz')
+        test_labels_filename = maybe_download('t10k-labels-idx1-ubyte.gz')
+        # Extract it into numpy arrays.
+        train_data = extract_data(train_data_filename, 550)
+        train_labels = extract_labels(train_labels_filename, 550)
+        val_data = extract_data(train_data_filename, 5000, 50000)
+        val_labels = extract_labels(train_labels_filename, 5000, 50000)
         test_data = extract_data(test_data_filename, 10000)
         test_labels = extract_labels(test_labels_filename, 10000)
     elif dataset_name == 'letters':
@@ -139,15 +155,16 @@ def dataset(dataset_name):
         letters_data_filename = maybe_download('letters-images-idx3-ubyte.gz')
         letters_labels_filename = maybe_download('letters-labels-idx1-ubyte.gz')
         # Extract it into numpy arrays.
-        train_data = extract_data(letters_data_filename, 360000)
-        train_labels = extract_labels(letters_labels_filename, 360000)
-        test_data = extract_data(letters_data_filename, 50000, 360000)
-        test_labels =\
-            extract_labels(letters_labels_filename, 50000, 360000)
+        train_data = extract_data(letters_data_filename, 330000)
+        train_labels = extract_labels(letters_labels_filename, 330000)
+        val_data = extract_data(letters_data_filename, 26000, 330000)
+        val_labels = extract_labels(letters_labels_filename, 26000, 330000)
+        test_data = extract_data(letters_data_filename, 52000, 356000)
+        test_labels = extract_labels(letters_labels_filename, 52000, 356000)
     else:
         raise ValueError("Unknow dataset \"%s\"" % dataset_name)
 
-    return train_data, train_labels, test_data, test_labels
+    return train_data, train_labels, val_data, val_labels, test_data, test_labels
 
 
 def model(data, label=None, train=False):
@@ -214,12 +231,12 @@ def model(data, label=None, train=False):
             loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
                 logits, label))
         elif FLAGS.target == "prob_l2":
-            loss = tf.nn.l2_loss(tf.nn.softmax(logits) - label) / BATCH_SIZE
+            loss = tf.nn.l2_loss(tf.nn.softmax(logits) - label) / FLAGS.batch_size
         elif FLAGS.target == "logit":
-            loss = tf.nn.l2_loss(logits - label) / BATCH_SIZE
+            loss = tf.nn.l2_loss(logits - label) / FLAGS.batch_size
         elif FLAGS.target == "logitp":
             loss = tf.nn.l2_loss(logits - tf_logit(label)) \
-                   / BATCH_SIZE
+                   / FLAGS.batch_size
         else:
             assert(FLAGS.target == "label")
             loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -235,26 +252,36 @@ def main(argv=None):  # pylint: disable=unused-argument
     dataset_names = FLAGS.dataset.split('+')
     train_data_list = []
     train_labels_list = []
+    val_data_list = []
+    val_labels_list = []
     test_data_list = []
     test_labels_list = []
     label_offset = 0
     for dataset_name in dataset_names:
-        train_data, train_labels, test_data, test_labels = dataset(dataset_name)
+        train_data, train_labels, val_data, val_labels, test_data, test_labels = dataset(dataset_name)
         train_data_list.append(train_data)
         train_labels_list.append(train_labels + label_offset)
+        val_data_list.append(val_data)
+        val_labels_list.append(val_labels + label_offset)
         test_data_list.append(test_data)
         test_labels_list.append(test_labels + label_offset)
-        label_offset += max(max(train_labels), max(test_labels)) + 1
+        label_offset += max(max(train_labels), max(val_labels), max(test_labels)) + 1
     train_data = numpy.concatenate(train_data_list, axis=0)
     train_labels = numpy.concatenate(train_labels_list, axis=0)
+    val_data = numpy.concatenate(val_data_list, axis=0)
+    val_labels = numpy.concatenate(val_labels_list, axis=0)
     test_data = numpy.concatenate(test_data_list, axis=0)
     test_labels = numpy.concatenate(test_labels_list, axis=0)
 
+    train_data_0 = train_data
+
     # shuffle data and labels
     order_idxs_train = numpy.random.permutation(numpy.arange(train_labels.shape[0]))
-    train_data_all = train_data
     train_data = train_data[order_idxs_train, :, :, :]
     train_labels = train_labels[order_idxs_train]
+    order_idxs_val = numpy.random.permutation(numpy.arange(val_labels.shape[0]))
+    val_data = val_data[order_idxs_val, :, :, :]
+    val_labels = val_labels[order_idxs_val]
     order_idxs_test = numpy.random.permutation(numpy.arange(test_labels.shape[0]))
     test_data = test_data[order_idxs_test, :, :, :]
     test_labels = test_labels[order_idxs_test]
@@ -262,13 +289,22 @@ def main(argv=None):  # pylint: disable=unused-argument
     global NUM_LABELS
     NUM_LABELS = max(train_labels) + 1
 
-    # Generate a validation set.
-    validation_data = train_data[FLAGS.train_size:(FLAGS.train_size + FLAGS.val_size), ...]
-    validation_labels = train_labels[FLAGS.train_size:(FLAGS.train_size + FLAGS.val_size)]
-    train_data = train_data[:FLAGS.train_size, ...]
-    train_labels = train_labels[:FLAGS.train_size]
+    # Reduce sample numbers if requested
+    if FLAGS.train_size >= 0:
+        train_data = train_data[:FLAGS.train_size, ...]
+        train_labels = train_labels[:FLAGS.train_size]
+    if FLAGS.val_size >= 0:
+        val_data = val_data[:FLAGS.val_size, ...]
+        val_labels = val_labels[:FLAGS.val_size]
+    if FLAGS.test_size >= 0:
+        test_data = test_data[:FLAGS.test_size, ...]
+        test_labels = test_labels[:FLAGS.test_size]
 
     train_size = train_labels.shape[0]
+    val_size = val_labels.shape[0]
+    test_size = test_labels.shape[0]
+
+    num_epochs = FLAGS.num_epochs
 
     # Training probs/logits
     if FLAGS.target != "label":
@@ -278,7 +314,7 @@ def main(argv=None):  # pylint: disable=unused-argument
             assert(FLAGS.target == "prob" or FLAGS.target == "prob_l2")
             train_logits = extract_logits(FLAGS.load_prob_from)
         train_logits = train_logits[order_idxs_train, :]
-        train_logits = train_logits[:FLAGS.train_size]
+        train_logits = train_logits[:train_size]
         gt_accuracy = numpy.sum((numpy.argmax(train_logits, 1) == train_labels).astype(numpy.int64)) \
                       / train_labels.shape[0]
         print("gt accuracy: %.2f%%" % (100 * float(gt_accuracy)))
@@ -286,17 +322,14 @@ def main(argv=None):  # pylint: disable=unused-argument
     # data & label nodes
     train_data_node = tf.placeholder(
         tf.float32,
-        shape=(BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS))
+        shape=(FLAGS.batch_size, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS))
     eval_data_node = tf.placeholder(
         tf.float32,
-        shape=(EVAL_BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS))
-
+        shape=(FLAGS.eval_batch_size, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS))
     if FLAGS.target == "label":
-        train_labels_node = tf.placeholder(tf.int64, shape=(BATCH_SIZE,))
+        train_labels_node = tf.placeholder(tf.int64, shape=(FLAGS.batch_size,))
     else:
-        train_labels_node = tf.placeholder(tf.float32, shape=(BATCH_SIZE, NUM_LABELS))
-
-    num_epochs = FLAGS.num_epochs
+        train_labels_node = tf.placeholder(tf.float32, shape=(FLAGS.batch_size, NUM_LABELS))
 
     # Training computation: logits + cross-entropy loss.
     with tf.variable_scope("cnn"):
@@ -305,13 +338,15 @@ def main(argv=None):  # pylint: disable=unused-argument
     # Optimizer: set up a variable that's incremented once per batch and
     # controls the learning rate decay.
     batch = tf.Variable(0)
+
     # Decay once per epoch, using an exponential schedule starting at 0.01.
     learning_rate = tf.train.exponential_decay(
         FLAGS.init_lr,  # Base learning rate.
-        batch * BATCH_SIZE,  # Current index into the dataset.
+        batch * FLAGS.batch_size,  # Current index into the dataset.
         train_size,  # Decay step.
         FLAGS.lr_decay,  # Decay rate.
         staircase=True)
+
     # Use simple momentum for the optimization.
     optimizer = tf.train.MomentumOptimizer(learning_rate,
                                            0.9).minimize(loss,
@@ -345,49 +380,54 @@ def main(argv=None):  # pylint: disable=unused-argument
             print("Model restored.")
 
         # Loop through training steps.
-        for step in xrange(int(num_epochs * train_size) // BATCH_SIZE):
-            # Compute the offset of the current minibatch in the data.
-            # Note that we could use better randomization across epochs.
-            offset = (step * BATCH_SIZE) % (train_size - BATCH_SIZE)
-            batch_data = train_data[offset:(offset + BATCH_SIZE), ...]
-            batch_labels = train_labels[offset:(offset + BATCH_SIZE)]
-            if FLAGS.target == 'label':
-                # This dictionary maps the batch data (as a numpy array) to the
-                # node in the graph is should be fed to.
-                feed_dict = {train_data_node: batch_data,
-                             train_labels_node: batch_labels}
-            else:
-                batch_logits = train_logits[offset:(offset + BATCH_SIZE), :]
-                # This dictionary maps the batch data (as a numpy array) to the
-                # node in the graph is should be fed to.
-                feed_dict = {train_data_node: batch_data,
-                             train_labels_node: batch_logits}
+        if train_size > 0:
+            for step in xrange(int(num_epochs * train_size) // FLAGS.batch_size):
+                # Compute the offset of the current minibatch in the data.
+                # Note that we could use better randomization across epochs.
+                offset = (step * FLAGS.batch_size) % (train_size - FLAGS.batch_size)
+                batch_data = train_data[offset:(offset + FLAGS.batch_size), ...]
+                batch_labels = train_labels[offset:(offset + FLAGS.batch_size)]
+                if FLAGS.target == 'label':
+                    # This dictionary maps the batch data (as a numpy array) to the
+                    # node in the graph is should be fed to.
+                    feed_dict = {train_data_node: batch_data,
+                                 train_labels_node: batch_labels}
+                else:
+                    batch_logits = train_logits[offset:(offset + FLAGS.batch_size), :]
+                    # This dictionary maps the batch data (as a numpy array) to the
+                    # node in the graph is should be fed to.
+                    feed_dict = {train_data_node: batch_data,
+                                 train_labels_node: batch_logits}
 
-            # Run the graph and fetch some of the nodes.
-            _, l, lr, predictions = sess.run(
-                [optimizer, loss, learning_rate, train_prediction],
-                feed_dict=feed_dict)
-            if step % EVAL_FREQUENCY == 0:
-                elapsed_time = time.time() - start_time
-                start_time = time.time()
-                print('Step %d (epoch %.2f), %.1f ms' %
-                      (step, float(step) * BATCH_SIZE / train_size,
-                       1000 * elapsed_time / EVAL_FREQUENCY))
-                print('Minibatch loss: %.3f, learning rate: %.6f' % (l, lr))
-                print('Minibatch error: %.1f%%' % error_rate(predictions, batch_labels))
-                print('Validation error: %.1f%%' % error_rate(
-                    eval_in_batches(eval_prediction, eval_data_node, validation_data, sess), validation_labels))
-                sys.stdout.flush()
+                # Run the graph and fetch some of the nodes.
+                _, l, lr, predictions = sess.run(
+                    [optimizer, loss, learning_rate, train_prediction],
+                    feed_dict=feed_dict)
+                if step % EVAL_FREQUENCY == 0:
+                    elapsed_time = time.time() - start_time
+                    start_time = time.time()
+                    print('Step %d (epoch %.2f), %.1f iters (%.1f images) per second' %
+                          (step, float(step) * FLAGS.batch_size / train_size,
+                           EVAL_FREQUENCY / elapsed_time, EVAL_FREQUENCY * FLAGS.batch_size / elapsed_time))
+                    print('Minibatch loss: %.3f, learning rate: %.6f' % (l, lr))
+                    print('Minibatch error: %.1f%%' % error_rate(predictions, batch_labels))
+                    if val_size > 0:
+                        print('Validation error: %.1f%%' % error_rate(
+                            eval_in_batches(eval_prediction, eval_data_node, val_data, sess), val_labels))
+                    sys.stdout.flush()
+
         # Save posteriors of training samples
         if len(FLAGS.save_prob_to) > 0:
-            train_probs = eval_in_batches(eval_prediction, eval_data_node, train_data_all, sess)
+            train_probs = eval_in_batches(eval_prediction, eval_data_node, train_data_0, sess)
             numpy.save(os.path.join(WORK_DIRECTORY, FLAGS.save_prob_to), train_probs)
         if len(FLAGS.save_logit_to) > 0:
-            train_logits = eval_in_batches(eval_logit, eval_data_node, train_data_all, sess)
+            train_logits = eval_in_batches(eval_logit, eval_data_node, train_data_0, sess)
             numpy.save(os.path.join(WORK_DIRECTORY, FLAGS.save_logit_to), train_logits)
+
         # Finally print the result!
-        test_error = error_rate(eval_in_batches(eval_prediction, eval_data_node, test_data, sess), test_labels)
-        print('Test error: %.1f%%' % test_error)
+        if test_size > 0:
+            test_error = error_rate(eval_in_batches(eval_prediction, eval_data_node, test_data, sess), test_labels)
+            print('Test error: %.1f%%' % test_error)
 
         # Save model
         if len(FLAGS.save_model_to) != 0:
