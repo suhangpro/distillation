@@ -28,8 +28,9 @@ tf.app.flags.DEFINE_integer("test_size", -1, "Size of testing set. Set to negati
 tf.app.flags.DEFINE_integer("num_epochs", 10, "Number of epochs.")
 tf.app.flags.DEFINE_integer("batch_size", 64, "Batch size at training.")
 tf.app.flags.DEFINE_integer("eval_batch_size", 512, "Batch size at evaluation.")
+tf.app.flags.DEFINE_integer("num_lr_stages", 4, "Number of different learning rate.")
 tf.app.flags.DEFINE_float("init_lr", 0.01, "Initial learning rate.")
-tf.app.flags.DEFINE_float("lr_decay", 0.95, "Learning rate decay.")
+tf.app.flags.DEFINE_float("lr_decay", 0.1, "Learning rate decay.")
 tf.app.flags.DEFINE_string("load_logit_from", "", "File name under data/ for loading logits.")
 tf.app.flags.DEFINE_string("save_logit_to", "", "File name under data/ for saving/loading logits.")
 tf.app.flags.DEFINE_string("load_prob_from", "", "File name under data/ for loading probs.")
@@ -339,11 +340,11 @@ def main(argv=None):  # pylint: disable=unused-argument
     # controls the learning rate decay.
     batch = tf.Variable(0)
 
-    # Decay once per epoch, using an exponential schedule starting at 0.01.
+    # Decay using an exponential schedule starting at 0.01.
     learning_rate = tf.train.exponential_decay(
         FLAGS.init_lr,  # Base learning rate.
         batch * FLAGS.batch_size,  # Current index into the dataset.
-        train_size,  # Decay step.
+        (train_size * FLAGS.num_epochs) // FLAGS.num_lr_stages,  # Decay step.
         FLAGS.lr_decay,  # Decay rate.
         staircase=True)
 
@@ -377,6 +378,7 @@ def main(argv=None):  # pylint: disable=unused-argument
             else:
                 loader = tf.train.Saver(var_list=var_list_wo_last)
             loader.restore(sess, os.path.join(WORK_DIRECTORY, FLAGS.load_model_from))
+            sess.run(tf.assign(batch, 0))
             print("Model restored.")
 
         # Loop through training steps.
